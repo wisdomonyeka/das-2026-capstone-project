@@ -35,6 +35,20 @@ function requireWholeNumber(value, field, min) {
   return value;
 }
 
+function requireIsoDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value)) {
+    throw new DomainError('VALIDATION', 'startsAt must be a valid ISO date');
+  }
+  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
+  const calendarDate = new Date(Date.UTC(year, month - 1, day));
+  if (calendarDate.getUTCFullYear() !== year || calendarDate.getUTCMonth() !== month - 1 || calendarDate.getUTCDate() !== day) {
+    throw new DomainError('VALIDATION', 'startsAt must be a valid ISO date');
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new DomainError('VALIDATION', 'startsAt must be a valid ISO date');
+  return date;
+}
+
 function getTier(store, tierId) {
   const tier = store.tiers.get(tierId);
   if (!tier) throw new DomainError('NOT_FOUND', 'Ticket tier not found');
@@ -42,10 +56,7 @@ function getTier(store, tierId) {
 }
 
 export function createEvent(store, { title, city, venue = '', startsAt, organizerId }) {
-  const date = new Date(startsAt);
-  if (Number.isNaN(date.getTime())) {
-    throw new DomainError('VALIDATION', 'startsAt must be a valid date');
-  }
+  const date = requireIsoDate(startsAt);
   const event = {
     id: newId(),
     organizerId,
@@ -77,6 +88,40 @@ export function addTier(store, eventId, { name, priceCents, capacity }) {
   store.waitlists.set(tier.id, new Queue());
   event.tierIds.push(tier.id);
   return tier;
+}
+
+export function publishEvent(store, eventId) {
+  const event = store.events.get(eventId);
+  if (!event) throw new DomainError('NOT_FOUND', 'Event not found');
+  if (event.tierIds.length === 0) {
+    throw new DomainError('INVALID_STATE', 'An event needs at least one ticket tier');
+  }
+  event.status = 'published';
+  return event;
+}
+
+export function unpublishEvent(store, eventId) {
+  const event = store.events.get(eventId);
+  if (!event) throw new DomainError('NOT_FOUND', 'Event not found');
+  event.status = 'draft';
+  return event;
+}
+
+export function listEventSummaries(store, { publishedOnly = true } = {}) {
+  return [...store.events.values()]
+    .filter((event) => !publishedOnly || event.status === 'published')
+    .map((event) => ({
+      id: event.id,
+      title: event.title,
+      city: event.city,
+      venue: event.venue,
+      startsAt: event.startsAt,
+      status: event.status,
+      tiers: event.tierIds.map((tierId) => {
+        const tier = store.tiers.get(tierId);
+        return { ...tier, seatsLeft: seatsLeft(tier) };
+      }),
+    }));
 }
 
 export function seatsLeft(tier) {
